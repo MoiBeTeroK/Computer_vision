@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Canny Edge Detection</title>
+<style>
+  canvas { margin: 5px; border: 1px solid black; }
+</style>
+</head>
+<body>
+
+<canvas id="original"></canvas>
+<canvas id="blurred"></canvas>
+<canvas id="edges"></canvas>
+
+<script>
+const IMAGE_PATH = "akula.jpg";
+
+const WIDTH = 500;
+const HEIGHT = 280;
+
+const originalCanvas = document.getElementById("original");
+const blurredCanvas = document.getElementById("blurred");
+const edgesCanvas = document.getElementById("edges");
+
+const originalCtx = originalCanvas.getContext("2d");
+const blurredCtx = blurredCanvas.getContext("2d");
+const edgesCtx = edgesCanvas.getContext("2d");
+
+originalCanvas.width = blurredCanvas.width = edgesCanvas.width = WIDTH;
+originalCanvas.height = blurredCanvas.height = edgesCanvas.height = HEIGHT;
+
+const img = new Image();
+img.src = IMAGE_PATH;
+img.onload = () => {
+    originalCtx.drawImage(img, 0, 0, WIDTH, HEIGHT);
+
+    let imageData = originalCtx.getImageData(0, 0, WIDTH, HEIGHT);
+    let gray = toGrayscale(imageData);
+    let blurred = gaussianBlur(gray, 5, 5);
+    drawGray(blurredCtx, blurred);
+
+    let {magnitude, angle} = gradient(blurred);
+    let suppressed = nonMaximumSuppression(magnitude, angle);
+    let edges = doubleThreshold(suppressed, 0.2, 0.5);
+    drawGray(edgesCtx, edges);
+};
+
+function toGrayscale(imageData){
+    let gray = [];
+    for(let y=0; y<HEIGHT; y++){
+        gray[y] = [];
+        for(let x=0; x<WIDTH; x++){
+            let idx = (y*WIDTH + x)*4;
+            let val = 0.299*imageData.data[idx] + 0.587*imageData.data[idx+1] + 0.114*imageData.data[idx+2];
+            gray[y][x] = val;
+        }
+    }
+    return gray;
+}
+
+function drawGray(ctx, data){
+    let imgData = ctx.createImageData(WIDTH, HEIGHT);
+    for(let y=0;y<HEIGHT;y++){
+        for(let x=0;x<WIDTH;x++){
+            let idx = (y*WIDTH + x)*4;
+            let val = data[y][x];
+            imgData.data[idx] = imgData.data[idx+1] = imgData.data[idx+2] = val;
+            imgData.data[idx+3] = 255;
+        }
+    }
+    ctx.putImageData(imgData, 0, 0);
+}
+
+function gaussianBlur(gray, n, sigma){
+    const kernel = [];
+    const a = Math.floor(n/2);
+    let sum = 0;
+    for(let i=0;i<n;i++){
+        kernel[i]=[];
+        for(let j=0;j<n;j++){
+            let val = Math.exp(-((i-a)**2 + (j-a)**2)/(2*sigma*sigma))/(2*Math.PI*sigma*sigma);
+            kernel[i][j] = val;
+            sum += val;
+        }
+    }
+    for(let i=0;i<n;i++) for(let j=0;j<n;j++) kernel[i][j]/=sum;
+
+    const h = gray.length, w = gray[0].length;
+    const result = [];
+    for(let y=0;y<h;y++){
+        result[y]=[];
+        for(let x=0;x<w;x++){
+            let val=0;
+            for(let ky=0; ky<n; ky++){
+                for(let kx=0; kx<n; kx++){
+                    let iy=y+ky-a;
+                    let ix=x+kx-a;
+                    if(iy>=0 && iy<h && ix>=0 && ix<w) val += gray[iy][ix]*kernel[ky][kx];
+                }
+            }
+            result[y][x]=val;
+        }
+    }
+    return result;
+}
+
+function gradient(gray){
+    const Gx_kernel = [[-1,0,1],[-2,0,2],[-1,0,1]];
+    const Gy_kernel = [[-1,-2,-1],[0,0,0],[1,2,1]];
+
+    const h = gray.length, w = gray[0].length;
+    const magnitude = [];
+    const angle = [];
+    for(let y=0;y<h;y++){
+        magnitude[y]=[];
+        angle[y]=[];
+        for(let x=0;x<w;x++){
+            let gx=0, gy=0;
+            for(let ky=-1; ky<=1; ky++){
+                for(let kx=-1; kx<=1; kx++){
+                    let iy=y+ky, ix=x+kx;
+                    if(iy>=0 && iy<h && ix>=0 && ix<w){
+                        gx += gray[iy][ix]*Gx_kernel[ky+1][kx+1];
+                        gy += gray[iy][ix]*Gy_kernel[ky+1][kx+1];
+                    }
+                }
+            }
+            magnitude[y][x] = Math.sqrt(gx*gx + gy*gy);
+            angle[y][x] = Math.atan2(gy, gx) * 180 / Math.PI;
+        }
+    }
+    return {magnitude, angle};
+}
+
+function nonMaximumSuppression(magnitude, angle){
+    const h = magnitude.length, w = magnitude[0].length;
+    const suppressed = [];
+    for(let y=0;y<h;y++){
+        suppressed[y] = [];
+        for(let x=0;x<w;x++){
+            suppressed[y][x] = 0;
+        }
+    }
+
+    for(let y=1;y<h-1;y++){
+        for(let x=1;x<w-1;x++){
+            let ang = angle[y][x];
+            if(ang < 0) ang += 180;
+
+            let mag = magnitude[y][x];
+            let q=0, r=0;
+
+            if((0 <= ang && ang < 22.5) || (157.5 <= ang && ang <= 180)){
+                q = magnitude[y][x+1];
+                r = magnitude[y][x-1];
+            } else if(22.5 <= ang && ang < 67.5){
+                q = magnitude[y+1][x-1];
+                r = magnitude[y-1][x+1];
+            } else if(67.5 <= ang && ang < 112.5){
+                q = magnitude[y+1][x];
+                r = magnitude[y-1][x];
+            } else if(112.5 <= ang && ang < 157.5){
+                q = magnitude[y-1][x-1];
+                r = magnitude[y+1][x+1];
+            }
+
+            if(mag >= q && mag >= r) suppressed[y][x] = mag;
+            else suppressed[y][x] = 0;
+        }
+    }
+    return suppressed;
+}
+
+function doubleThreshold(suppressed, highRatio=0.2, lowRatio=0.5){
+    const h = suppressed.length, w = suppressed[0].length;
+    let maxGrad = 0;
+    for(let y=0;y<h;y++)
+        for(let x=0;x<w;x++)
+            if(suppressed[y][x]>maxGrad) maxGrad=suppressed[y][x];
+
+    const high = maxGrad * highRatio;
+    const low = high * lowRatio;
+
+    const strong = 255, weak = 50;
+    const res = [];
+    for(let y=0;y<h;y++){
+        res[y] = [];
+        for(let x=0;x<w;x++){
+            if(suppressed[y][x]>=high) res[y][x]=strong;
+            else if(suppressed[y][x]>=low) res[y][x]=weak;
+            else res[y][x]=0;
+        }
+    }
+
+    for(let y=1;y<h-1;y++){
+        for(let x=1;x<w-1;x++){
+            if(res[y][x]===weak){
+                if([res[y-1][x-1],res[y-1][x],res[y-1][x+1],
+                    res[y][x-1],res[y][x+1],
+                    res[y+1][x-1],res[y+1][x],res[y+1][x+1]].includes(strong)){
+                    res[y][x]=strong;
+                } else {
+                    res[y][x]=0;
+                }
+            }
+        }
+    }
+
+    return res;
+}
+</script>
+</body>
+</html>
